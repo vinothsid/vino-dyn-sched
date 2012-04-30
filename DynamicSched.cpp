@@ -171,6 +171,8 @@ int ExeList::cleanup() {
 Processor::Processor(int ROB_size,int disList_size,int issueList_size,int exeList_size) {
 	totalIns = 0;
 	totalCycle = 0;
+	numScalarWay  = exeList_size;
+	robEntryIndex = 0;
 	ins = new Instruction[ROB_size];
 	robQ = new myqueue(ROB_size);
 	dispatchList = new DispatchList(disList_size);
@@ -277,6 +279,39 @@ int Processor::dispatch() {
 
 int Processor::fetch(ifstream &myfile) {
 
+	string line;
+	char address[9];
+	int i=0;
+	int operType,dest,src1,src2;	
+	if(myfile.is_open() ) {
+		while( i < numScalarWay && !dispatchList->isFull() && getline(myfile,line) ) {
+			
+		//	cout << myfile.eof() << endl;
+			stringstream str(line);
+
+			str >> address;
+			str >> operType;
+			str >> dest;
+			str >> src1;
+			str >> src2;
+
+#ifdef DEBUG
+			cout <<  "INS : " << totalIns << ": " <<  address << " " << operType << " " << dest << " " << src1 << " " << src2 << endl;
+#endif
+
+
+			i++;
+			totalIns++;
+		}
+
+		return 0;
+	} else {
+#ifdef DEBUG
+		cout << "File is not open" << endl;
+#endif
+
+		return -1;
+	}
 }
 
 int Processor::run(char *fileName) {
@@ -293,6 +328,10 @@ int main(int argc,char *argv[]) {
 	cout << "IF " << IF << " WB " << WB << endl;
 #endif
 
-	Processor proc(ROB_SIZE,16,8,8);
+	Processor proc(ROB_SIZE,8,16,4);
+
+	proc.run("debug_trace_gcc1");
+//	proc.run("tmp");
+	
 	//Instruction *ins = new Instruction[ROB_SIZE];
 }
