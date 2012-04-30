@@ -4,42 +4,35 @@
 #include "string.h"
 #include <iomanip>
 #include "stdlib.h"
-#include <algorithm>
-#include <queue>
-#include <list>
-#include <deque>
-#define NUM_REGS 128
-#define ROB_SIZE 1024
+#include "DynamicSched.h"
 
-#define DEBUG 1
+RegFile::RegFile() {
+	for(int i=0;i<NUM_REGS;i++) {
+		ready[i] = true;
+		tag[i] = -1;
+	}	
+}
 
-using namespace std;
-
-enum pipe_stage_t {IF,ID,IS,EX,WB,NUM_STAGES,INVALID_STAGE};
-string stageNames[NUM_STAGES] = {"IF","ID","IS","EX","WB"};
-
-class Instruction {
-	int tag;
-	int operType;
-	int dest;
-	int src1;
-	int src2;
-	pipe_stage_t curStage;
-	int bCycle[NUM_STAGES]; // begin cycle time
-	int duration[NUM_STAGES];
+bool RegFile::isReady(int regNo) {
 	
-public:
-	Instruction();
-	int setStage(pipe_stage_t state);
-	pipe_stage_t getStage();
-	int setParams(int tg,int optype,int dst,int s1,int s2);
-	int resetParams();
-	int setBeginCycle(int ct,pipe_stage_t state);
-	int incrDuration( pipe_stage_t state);
-	bool isDone();
-	int renameSrcRegs();
-	int print();
-};
+	return ready[regNo];
+}
+
+int RegFile::setTag(int regNo,int tf) {
+
+	tag[regNo] = tf;
+	return 0;	
+}
+
+int RegFile::getTag(int regNo) {
+	return tag[regNo];
+}
+
+int RegFile::setReady(int regNo,bool value) {
+
+	ready[regNo] = value;
+	return 0;
+}
 
 Instruction::Instruction() {
 	tag = -1;
@@ -65,13 +58,14 @@ pipe_stage_t Instruction::getStage() {
 	return curStage;
 }
 
-int Instruction::setParams(int tg,int optype,int dst,int s1,int s2) {
+int Instruction::setParams(int tg,int optype,int dst,int s1,int s2,bool readyS1,bool readyS2) {
 	tag = tg;
 	operType = optype;
 	dest = dst;
 	src1 = s1;
 	src2 = s2;
-
+	readySrc1= readyS1;
+	readySrc2 = readyS2;	
 	return 0;
 }
 
@@ -82,6 +76,8 @@ int Instruction::resetParams() {
         dest = -1;
         src1 = -1;
         src2 = -1;
+	readySrc1 = false;
+	readySrc2 = false;
         curStage = INVALID_STAGE;
         for(int i=0;i<NUM_STAGES;i++) {
                 bCycle[i] = -1;
@@ -105,9 +101,6 @@ bool Instruction::isDone() {
 	return (curStage == WB) ;
 }
 
-int Instruction::renameSrcRegs() {
-
-}
 
 int Instruction::print() {
 
@@ -121,25 +114,12 @@ int Instruction::print() {
 	cout << endl;
 
 }
-class RegFile {
-	bool ready[NUM_REGS];
-	int tag[NUM_REGS];
-public:
-	RegFile();
-	bool isReady(int regNo);
-	int setTag(int regNo,int tg);
-	int getTag(int regNo);
-	int setReady(int regNo,bool value);
 
-};
+int printList( list<Instruction *> *li ) {
+	for(list<Instruction *>::iterator it = li->begin(); it!= li->end() ; it++) 
+		(*it)->print();
 
-class myqueue : public queue<Instruction *> {
-	int len;
-public:
-	myqueue(int s);
-	bool isFull();
-
-};
+}
 
 myqueue::myqueue(int s) {
 	len = s;
@@ -149,14 +129,6 @@ bool myqueue::isFull() {
 	return len==size();
 }
 
-class mylist : public list<Instruction *> {
-	int len;
-public:
-	mylist(int s);
-	bool isFull();
-	virtual int cleanup() = 0 ;
-};
-
 mylist::mylist(int s) {
 	len =s;
 }
@@ -165,14 +137,6 @@ bool mylist::isFull() {
 	return len==size();
 }
 
-class DispatchList : public mylist {
-
-public:
-	DispatchList(int s) : mylist(s) {}
-	bool static removeCondition(Instruction *in );
-	int cleanup();
-
-};
 
 bool  DispatchList::removeCondition(Instruction * in) {
 	cout << "Remove condition : " << in->getStage() << endl;
@@ -185,13 +149,6 @@ int DispatchList::cleanup() {
 }
 
 
-class IssueList : public mylist {
-public:
-        IssueList(int s) : mylist(s) {}
-        bool static removeCondition(Instruction *in );
-        int cleanup();
-
-};
 bool  IssueList::removeCondition(Instruction * in) {
         cout << "Remove condition : " << in->getStage() << endl;
         return ((in)->getStage() == EX) ;
@@ -200,15 +157,6 @@ bool  IssueList::removeCondition(Instruction * in) {
 int IssueList::cleanup() {
         remove_if(IssueList::removeCondition);
 }
-
-
-class ExeList : public mylist {
-public:
-        ExeList(int s) : mylist(s) {}
-        bool static removeCondition(Instruction *in );
-        int cleanup();
-
-};
 
 bool  ExeList::removeCondition(Instruction * in) {
         cout << "Remove condition : " << in->getStage() << endl;
@@ -220,71 +168,47 @@ int ExeList::cleanup() {
         remove_if(ExeList::removeCondition);
 }
 
-class Processor {
-	int totalIns;
-	int totalCycle;
-	Instruction *ins;
-	myqueue *robQ;
-        DispatchList *dispatchList;
-        IssueList *issueList;
-        ExeList *exeList;	
-	//dispatch list
-	//issue list
-	//execute list
-	//ROB queue
+Processor::Processor(int ROB_size,int disList_size,int issueList_size,int exeList_size) {
+	totalIns = 0;
+	totalCycle = 0;
+	ins = new Instruction[ROB_size];
+	robQ = new myqueue(ROB_size);
+	dispatchList = new DispatchList(disList_size);
+	issueList = new IssueList(issueList_size);
+	exeList = new ExeList(exeList_size);
 
-public:
-	Processor(int ROB_size,int disList_size,int issueList_size,int exeList_size);
-
-};
-
-int printList( list<Instruction *> &li ) {
-	for(list<Instruction *>::iterator it = li.begin(); it!= li.end() ; it++) 
-		(*it)->print();
-
-}
-int main(int argc,char *argv[]) {
-
-#ifdef DEBUG
-	cout << "IF " << IF << " WB " << WB << endl;
-#endif
-
-	Instruction *ins = new Instruction[ROB_SIZE];
-	ins[0].setParams(0,0,2,0,1);
+	ins[0].setParams(0,0,2,0,1,true,true);
 	ins[0].setStage(IS);
 
-	ins[1].setParams(1,1,-1,0,1);
+	ins[1].setParams(1,1,-1,0,1,true,true);
 	ins[1].setStage(ID);
 
-	ins[2].setParams(2,0,-1,0,-1);
+	ins[2].setParams(2,0,-1,0,-1,true,true);
 	ins[2].setStage(IF);
 
-	myqueue robQ(ROB_SIZE);
-	robQ.push(ins);
-	robQ.push(ins+1);
-	robQ.push(ins+2);
+	//myqueue robQ(ROB_SIZE);
+	robQ->push(ins);
+	robQ->push(ins+1);
+	robQ->push(ins+2);
 
-	cout << "queue size " << robQ.size() << endl ;
+	cout << "queue size " << robQ->size() << endl ;
 
 	//list<Instruction *> dispatchList;
-	DispatchList dispatchList(5);
-	list<Instruction *> issueList;
-	list<Instruction *> exeList;
 	Instruction *i;
 
-	while( robQ.size() > 0 ) {
-		i = robQ.front();
+	while( robQ->size() > 0 ) {
+		i = robQ->front();
 		i->print();
-		dispatchList.push_back(i);
-		robQ.pop();
+		dispatchList->push_back(i);
+		robQ->pop();
 	}
 
 	cout<<"Traversing list" << endl;
-
+/*
 	for(list<Instruction *>::iterator it = dispatchList.begin(); it!= dispatchList.end() ; it++) {
 //		(*it)->print();
 
-/*		if( (*it)->getStage() == ID ) {
+		if( (*it)->getStage() == ID ) {
 			(*it)->setStage(IS);
 			issueList.push_back(*it);	
 		}
@@ -293,8 +217,8 @@ int main(int argc,char *argv[]) {
 			(*it)->setStage(EX);
 			exeList.push_back(*it);
 		}
-*/
 	}
+*/
 
 	cout <<"Dispatch List" << endl;
 	printList(dispatchList);
@@ -303,7 +227,72 @@ int main(int argc,char *argv[]) {
 	cout<<"Execute List" << endl;
 	printList(exeList);	
 
-	dispatchList.cleanup();
+	dispatchList->cleanup();
 	cout <<"Dispatch List" << endl;
 	printList(dispatchList);
+
+}
+
+int Processor::renameSrcRegs(Instruction *i) {
+
+	if( regFile.isReady(i->src1) ) {
+		i->readySrc1 = true;
+	} else {
+#ifdef DEBUG
+		cout << "Renaming register : " << i->src1 << " with " << regFile.getTag(i->src1) << endl;
+#endif
+		i->readySrc1 = false;
+		i->src1 = regFile.getTag(i->src1);
+	}
+
+	if( regFile.isReady(i->src2) ) {
+		i->readySrc1 = true;
+	} else {
+#ifdef DEBUG
+		cout << "Renaming register : " << i->src1 << " with " << regFile.getTag(i->src1) << endl;
+#endif
+		i->readySrc1 = false;
+		i->src2 = regFile.getTag(i->src2);
+	}
+
+	return 0;
+
+}
+
+int Processor::fakeRetire() {
+
+}
+
+int Processor::execute() {
+
+}
+
+int Processor::issue() {
+
+}
+
+int Processor::dispatch() {
+
+}
+
+int Processor::fetch(ifstream &myfile) {
+
+}
+
+int Processor::run(char *fileName) {
+
+	ifstream myfile(fileName);
+
+	fetch(myfile);
+
+}
+
+int main(int argc,char *argv[]) {
+
+#ifdef DEBUG
+	cout << "IF " << IF << " WB " << WB << endl;
+#endif
+
+	Processor proc(ROB_SIZE,16,8,8);
+	//Instruction *ins = new Instruction[ROB_SIZE];
 }
