@@ -34,6 +34,11 @@ int RegFile::setReady(int regNo,bool value) {
 	return 0;
 }
 
+int RegFile::print() {
+	for(int i=0;i<NUM_REGS;i++) {
+		cout << i << " " << ready[i] << " " << tag[i] << endl;
+	}
+}
 Instruction::Instruction() {
 	tag = -1;
 	operType = -1;
@@ -58,7 +63,7 @@ pipe_stage_t Instruction::getStage() {
 	return curStage;
 }
 
-int Instruction::setParams(int tg,int optype,int dst,int s1,int s2,bool readyS1,bool readyS2) {
+int Instruction::setParams(int tg,int optype,int dst,int s1,int s2,bool readyS1 ,bool readyS2 ) {
 	tag = tg;
 	operType = optype;
 	dest = dst;
@@ -134,6 +139,7 @@ mylist::mylist(int s) {
 }
 
 bool mylist::isFull() {
+//	cout << " length : " << len << "size() " << size() << endl;
 	return len==size();
 }
 
@@ -179,6 +185,7 @@ Processor::Processor(int ROB_size,int disList_size,int issueList_size,int exeLis
 	issueList = new IssueList(issueList_size);
 	exeList = new ExeList(exeList_size);
 
+/*
 	ins[0].setParams(0,0,2,0,1,true,true);
 	ins[0].setStage(IS);
 
@@ -206,7 +213,7 @@ Processor::Processor(int ROB_size,int disList_size,int issueList_size,int exeLis
 	}
 
 	cout<<"Traversing list" << endl;
-/*
+
 	for(list<Instruction *>::iterator it = dispatchList.begin(); it!= dispatchList.end() ; it++) {
 //		(*it)->print();
 
@@ -220,7 +227,7 @@ Processor::Processor(int ROB_size,int disList_size,int issueList_size,int exeLis
 			exeList.push_back(*it);
 		}
 	}
-*/
+
 
 	cout <<"Dispatch List" << endl;
 	printList(dispatchList);
@@ -232,31 +239,37 @@ Processor::Processor(int ROB_size,int disList_size,int issueList_size,int exeLis
 	dispatchList->cleanup();
 	cout <<"Dispatch List" << endl;
 	printList(dispatchList);
-
+*/
 }
 
 int Processor::renameSrcRegs(Instruction *i) {
 
-	if( regFile.isReady(i->src1) ) {
-		i->readySrc1 = true;
-	} else {
+	if ( i->src1 != -1) {
+		if( regFile.isReady(i->src1) ) {
+			i->readySrc1 = true;
+		} else {
 #ifdef DEBUG
-		cout << "Renaming register : " << i->src1 << " with " << regFile.getTag(i->src1) << endl;
+			cout << "Renaming register : " << i->src1 << " with " << regFile.getTag(i->src1) << endl;
 #endif
-		i->readySrc1 = false;
-		i->src1 = regFile.getTag(i->src1);
+			i->readySrc1 = false;
+			i->src1 = regFile.getTag(i->src1);
+		}
+
 	}
 
-	if( regFile.isReady(i->src2) ) {
-		i->readySrc1 = true;
-	} else {
-#ifdef DEBUG
-		cout << "Renaming register : " << i->src1 << " with " << regFile.getTag(i->src1) << endl;
-#endif
-		i->readySrc1 = false;
-		i->src2 = regFile.getTag(i->src2);
-	}
+	if ( i->src2 != -1) {
 
+		if( regFile.isReady(i->src2) ) {
+			i->readySrc1 = true;
+		} else {
+#ifdef DEBUG
+			cout << "Renaming register : " << i->src2 << " with " << regFile.getTag(i->src1) << endl;
+#endif
+			i->readySrc1 = false;
+			i->src2 = regFile.getTag(i->src2);
+		}
+
+	}
 	return 0;
 
 }
@@ -275,6 +288,37 @@ int Processor::issue() {
 
 int Processor::dispatch() {
 
+	int i=0;
+	list<Instruction *>::iterator it ;
+	it = dispatchList->begin();
+	while(i < numScalarWay && dispatchList->size() != 0 && !issueList->isFull() && it!=dispatchList->end() ) {
+
+		if( (*it)->getStage() == ID ) {
+			renameSrcRegs( *it );
+			(*it)->setStage(IS);
+
+			issueList->push_back( *it );	
+
+			if ( (*it)->dest != -1 ) {
+				regFile.setTag((*it)->dest,(*it)->tag);			
+				regFile.setReady((*it)->dest,false);
+			}
+
+			i++;
+		}
+
+		it++;
+	} 
+
+	for(it = dispatchList->begin() ; it != dispatchList->end();it++) {
+		if((*it)->getStage() == IF) {
+			(*it)->setStage(ID);
+			(*it)->setBeginCycle(totalCycle,ID);
+			(*it)->incrDuration(ID);
+		}
+	}
+
+	dispatchList->cleanup();
 }
 
 int Processor::fetch(ifstream &myfile) {
@@ -283,6 +327,7 @@ int Processor::fetch(ifstream &myfile) {
 	char address[9];
 	int i=0;
 	int operType,dest,src1,src2;	
+	Instruction *instr;
 	if(myfile.is_open() ) {
 		while( i < numScalarWay && !dispatchList->isFull() && getline(myfile,line) ) {
 			
@@ -300,8 +345,18 @@ int Processor::fetch(ifstream &myfile) {
 #endif
 
 
+			instr = ins + robEntryIndex;
+			instr->setParams(totalIns,operType,dest,src1,src2);
+			instr->setStage(IF);
+			instr->setBeginCycle(totalCycle,IF);
+			instr->incrDuration(IF);
+	
+			robQ->push(instr);		
+			dispatchList->push_back(instr);
+				
 			i++;
 			totalIns++;
+			robEntryIndex = (robEntryIndex+1)%ROB_SIZE;
 		}
 
 		return 0;
@@ -319,6 +374,25 @@ int Processor::run(char *fileName) {
 	ifstream myfile(fileName);
 
 	fetch(myfile);
+	
+#ifdef DEBUG
+	cout << "After fetching. Dispatch list\n";
+	printList(dispatchList);
+#endif
+
+	dispatch();
+
+	totalCycle++;
+	fetch(myfile);
+	dispatch();
+
+#ifdef DEBUG
+	cout << "After dispatching .Dispatch List\n";
+	printList(dispatchList);
+	cout << "IssueList\n";
+	printList(issueList);
+	regFile.print();
+#endif
 
 }
 

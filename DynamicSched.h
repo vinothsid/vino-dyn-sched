@@ -74,12 +74,18 @@ public:
         int setTag(int regNo,int tg);
         int getTag(int regNo);
         int setReady(int regNo,bool value);
-
+	int print();
 };
 
 
 class Processor;
 class Instruction {
+        pipe_stage_t curStage;
+        int bCycle[NUM_STAGES]; // begin cycle time
+        int duration[NUM_STAGES];
+        friend class Processor;
+
+public:
         int tag;
         int operType;
         int dest;
@@ -87,22 +93,16 @@ class Instruction {
         int src2;
         bool readySrc1;
         bool readySrc2;
-        pipe_stage_t curStage;
-        int bCycle[NUM_STAGES]; // begin cycle time
-        int duration[NUM_STAGES];
-        friend class Processor;
-
-public:
+ 
         Instruction();
         int setStage(pipe_stage_t state);
         pipe_stage_t getStage();
-        int setParams(int tg,int optype,int dst,int s1,int s2,bool readyS1,bool readyS2);
+        int setParams(int tg,int optype,int dst,int s1,int s2,bool readyS1 = true ,bool readyS2 = true);
         int resetParams();
         int setBeginCycle(int ct,pipe_stage_t state);
         int incrDuration( pipe_stage_t state);
         bool isDone();
         int print();
-
 };
 
 class Processor {
