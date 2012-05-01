@@ -145,7 +145,7 @@ bool mylist::isFull() {
 
 
 bool  DispatchList::removeCondition(Instruction * in) {
-	cout << "Remove condition : " << in->getStage() << endl;
+	//cout << "Remove condition : " << in->getStage() << endl;
 	return ((in)->getStage() == IS) ;
 	
 }
@@ -174,6 +174,15 @@ int ExeList::cleanup() {
         remove_if(ExeList::removeCondition);
 }
 
+struct comp {
+	bool operator()(Instruction *i,Instruction *j) {
+		return ( i->tag < j->tag);
+	}
+} mycomp;
+
+bool myfunc(Instruction *i,Instruction *j) {
+	return ( i->tag < j->tag);
+}
 Processor::Processor(int ROB_size,int disList_size,int issueList_size,int exeList_size) {
 	totalIns = 0;
 	totalCycle = 0;
@@ -255,6 +264,8 @@ int Processor::renameSrcRegs(Instruction *i) {
 			i->src1 = regFile.getTag(i->src1);
 		}
 
+	} else {
+		i->readySrc1 = true;
 	}
 
 	if ( i->src2 != -1) {
@@ -269,6 +280,8 @@ int Processor::renameSrcRegs(Instruction *i) {
 			i->src2 = regFile.getTag(i->src2);
 		}
 
+	} else {
+		i->readySrc2 = true;
 	}
 	return 0;
 
@@ -279,24 +292,73 @@ int Processor::fakeRetire() {
 }
 
 int Processor::execute() {
-
+	int i=0;
+	list<Instruction *>::iterator it;
+	for(it = exeList->begin(); it != exeList->end() ; it++) {
+		if( (*it)->getStage() == EX)
+			(*it)->incrDuration(EX);
+		else
+			cout << "Error: Invalid state instruction is seen in execute List: " << (*it)->getStage() << endl ; 
+	}	
 }
 
 int Processor::issue() {
+	int i=0;
+	list<Instruction *>::iterator it;
+	list<Instruction *> tempList;
+	for(it = issueList->begin(); it!= issueList->end();it++) {
+		if((*it)->readySrc1 == true && (*it)->readySrc2 == true)
+			tempList.push_back( *it );
+		
+		if( (*it)->getStage() == IS ) 
+			(*it)->incrDuration(IS);
+		else
+			cout << "Error: Invalid state instruction is seen in Issue List: " << (*it)->getStage() << endl ; 
+			
+	}
+	tempList.sort(myfunc);
+	//sort(tempList.begin(),tempList.end(),myfunc);
 
+#ifdef DEBUG
+	cout << "TempList \n";
+	printList(&tempList);
+#endif
+	it = tempList.begin();
+	while(i<numScalarWay && tempList.size()!= 0 && !exeList->isFull() && it!= tempList.end() ) {
+		(*it)->setStage(EX);
+		(*it)->setBeginCycle(totalCycle,EX);
+		
+		exeList->push_back((*it));
+
+		i++;
+		it++;
+	}	
+
+	issueList->cleanup();
 }
 
 int Processor::dispatch() {
 
 	int i=0;
 	list<Instruction *>::iterator it ;
+	for(it = dispatchList->begin() ; it != dispatchList->end();it++) {
+                if((*it)->getStage() == ID) {
+                        (*it)->incrDuration(ID);
+                } else if((*it)->getStage() == IF) {
+                        (*it)->incrDuration(IF);
+                } else {
+			cout << "Error: Invalid state instruction is seen in Dispatch List: " << (*it)->getStage() << endl ; 
+		}
+        }
+
+
 	it = dispatchList->begin();
 	while(i < numScalarWay && dispatchList->size() != 0 && !issueList->isFull() && it!=dispatchList->end() ) {
 
 		if( (*it)->getStage() == ID ) {
 			renameSrcRegs( *it );
 			(*it)->setStage(IS);
-
+			(*it)->setBeginCycle(totalCycle,IS);
 			issueList->push_back( *it );	
 
 			if ( (*it)->dest != -1 ) {
@@ -310,11 +372,11 @@ int Processor::dispatch() {
 		it++;
 	} 
 
-	for(it = dispatchList->begin() ; it != dispatchList->end();it++) {
+	for(it = dispatchList->begin(),i=0 ; it != dispatchList->end() && i < numScalarWay ;it++) {
 		if((*it)->getStage() == IF) {
 			(*it)->setStage(ID);
 			(*it)->setBeginCycle(totalCycle,ID);
-			(*it)->incrDuration(ID);
+			i++;
 		}
 	}
 
@@ -341,7 +403,7 @@ int Processor::fetch(ifstream &myfile) {
 			str >> src2;
 
 #ifdef DEBUG
-			cout <<  "INS : " << totalIns << ": " <<  address << " " << operType << " " << dest << " " << src1 << " " << src2 << endl;
+			//cout <<  "INS : " << totalIns << ": " <<  address << " " << operType << " " << dest << " " << src1 << " " << src2 << endl;
 #endif
 
 
@@ -349,7 +411,7 @@ int Processor::fetch(ifstream &myfile) {
 			instr->setParams(totalIns,operType,dest,src1,src2);
 			instr->setStage(IF);
 			instr->setBeginCycle(totalCycle,IF);
-			instr->incrDuration(IF);
+			//instr->incrDuration(IF);
 	
 			robQ->push(instr);		
 			dispatchList->push_back(instr);
@@ -381,16 +443,20 @@ int Processor::run(char *fileName) {
 #endif
 
 	dispatch();
+	issue();
 
 	totalCycle++;
 	fetch(myfile);
 	dispatch();
-
+	issue();
+	totalCycle++;
 #ifdef DEBUG
 	cout << "After dispatching .Dispatch List\n";
 	printList(dispatchList);
 	cout << "IssueList\n";
 	printList(issueList);
+	cout << "Exe List\n";
+	printList(exeList);
 	regFile.print();
 #endif
 
