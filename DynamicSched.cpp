@@ -45,6 +45,10 @@ Instruction::Instruction() {
 	dest = -1;
 	src1 = -1;
 	src2 = -1;
+	origSrc1 = -1;
+	origSrc2 = -1;
+	readySrc1 = true;
+	readySrc2 = true;
 	curStage = INVALID_STAGE;
 	for(int i=0;i<NUM_STAGES;i++) {
 		bCycle[i] = -1;
@@ -69,6 +73,8 @@ int Instruction::setParams(int tg,int optype,int dst,int s1,int s2,bool readyS1 
 	dest = dst;
 	src1 = s1;
 	src2 = s2;
+	origSrc1 = s1;
+	origSrc2 = s2;
 	readySrc1= readyS1;
 	readySrc2 = readyS2;	
 	return 0;
@@ -81,8 +87,10 @@ int Instruction::resetParams() {
         dest = -1;
         src1 = -1;
         src2 = -1;
-	readySrc1 = false;
-	readySrc2 = false;
+	readySrc1 = true ;
+	readySrc2 = true ;
+	origSrc1 = -1;
+	origSrc2 = -1;
         curStage = INVALID_STAGE;
         for(int i=0;i<NUM_STAGES;i++) {
                 bCycle[i] = -1;
@@ -106,15 +114,14 @@ bool Instruction::isDone() {
 	return (curStage == WB) ;
 }
 
-
 int Instruction::print() {
 
-	cout << tag << " fu{" << operType << "} src{" << src1 << "," << src2 << "} dst{" << dest << "}" ; //IF{<begin-cycle>,<duration>} ID{…} IS{…} EX{…} WB{…}
+	cout << tag << " fu{" << operType << "} src{" << origSrc1 << "," << origSrc2 << "} dst{" << dest << "}" ; //IF{<begin-cycle>,<duration>} ID{…} IS{…} EX{…} WB{…}
 	for(int i=0;i<NUM_STAGES;i++) {
 		cout << " " << stageNames[i] << "{" << bCycle[i] << "," << duration[i] << "}" ;
 	}
 #ifdef DEBUG
-	cout << " CurStage:" << curStage;
+	cout << " CurStage:" << curStage << " readySrc {" << readySrc1 << "," << readySrc2 << "}" << " renamed src{" << src1 << "," << src2 << "}"  ;
 #endif
 	cout << endl;
 
@@ -125,13 +132,25 @@ int printList( list<Instruction *> *li ) {
 		(*it)->print();
 
 }
-
+/*
 myqueue::myqueue(int s) {
 	len = s;
 }
 
 bool myqueue::isFull() {
 	return len==size();
+}
+*/
+int myqueue::cleanup() {
+	Instruction *i = front();
+	
+	while ( size()!= 0 && i->isDone() ) {
+		i->print();
+		i->resetParams();
+		pop_front();
+		i = front();
+	}
+	
 }
 
 mylist::mylist(int s) {
@@ -156,7 +175,7 @@ int DispatchList::cleanup() {
 
 
 bool  IssueList::removeCondition(Instruction * in) {
-        cout << "Remove condition : " << in->getStage() << endl;
+    //    cout << "Remove condition : " << in->getStage() << endl;
         return ((in)->getStage() == EX) ;
 
 }
@@ -165,7 +184,7 @@ int IssueList::cleanup() {
 }
 
 bool  ExeList::removeCondition(Instruction * in) {
-        cout << "Remove condition : " << in->getStage() << endl;
+      //  cout << "Remove condition : " << in->getStage() << endl;
         return ((in)->getStage() == WB) ;
 
 }
@@ -183,16 +202,18 @@ struct comp {
 bool myfunc(Instruction *i,Instruction *j) {
 	return ( i->tag < j->tag);
 }
-Processor::Processor(int ROB_size,int disList_size,int issueList_size,int exeList_size) {
+Processor::Processor(int ROB_size,int disList_size,int issueList_size,int nWay,char *fileName ) : myfile(fileName)
+{
 	totalIns = 0;
 	totalCycle = 0;
-	numScalarWay  = exeList_size;
+	numScalarWay  = nWay;
 	robEntryIndex = 0;
+	schedQueueSize = issueList_size;
 	ins = new Instruction[ROB_size];
 	robQ = new myqueue(ROB_size);
 	dispatchList = new DispatchList(disList_size);
 	issueList = new IssueList(issueList_size);
-	exeList = new ExeList(exeList_size);
+	exeList = new ExeList( numScalarWay * MAX_EXEC_CYCLE);
 
 /*
 	ins[0].setParams(0,0,2,0,1,true,true);
@@ -271,12 +292,12 @@ int Processor::renameSrcRegs(Instruction *i) {
 	if ( i->src2 != -1) {
 
 		if( regFile.isReady(i->src2) ) {
-			i->readySrc1 = true;
+			i->readySrc2 = true;
 		} else {
 #ifdef DEBUG
-			cout << "Renaming register : " << i->src2 << " with " << regFile.getTag(i->src1) << endl;
+			cout << "Renaming register : " << i->src2 << " with " << regFile.getTag(i->src2) << endl;
 #endif
-			i->readySrc1 = false;
+			i->readySrc2 = false;
 			i->src2 = regFile.getTag(i->src2);
 		}
 
@@ -287,12 +308,28 @@ int Processor::renameSrcRegs(Instruction *i) {
 
 }
 
+int Processor::advanceCycle() {
+	totalCycle++;
+	if (myfile.eof() && robQ->size() == 0)
+		return false;
+	else
+		return true;	
+}
 int Processor::fakeRetire() {
-
+/*
+        list<Instruction *>::iterator it;
+        for(it = robQ->begin(); it != robQ->end() ; it++) {
+                if( (*it)->getStage() == WB)
+                        (*it)->incrDuration(WB);
+        }
+*/
+#ifdef DEBUG
+	cout << "After fake retire " << endl;
+#endif
+	robQ->cleanup();
 }
 
 int Processor::execute() {
-	int i=0;
 	list<Instruction *>::iterator it;
 	for(it = exeList->begin(); it != exeList->end() ; it++) {
 		if( (*it)->getStage() == EX)
@@ -300,6 +337,34 @@ int Processor::execute() {
 		else
 			cout << "Error: Invalid state instruction is seen in execute List: " << (*it)->getStage() << endl ; 
 	}	
+
+	it = exeList->begin();
+	int operType;
+	while(  exeList->size() != 0 && it != exeList->end() ) {
+		operType = (*it)->operType;
+		
+		if( execTime4Oper[ operType ] == (*it)->duration[EX] ) {
+			(*it)->setStage(WB);
+			(*it)->setBeginCycle(totalCycle,WB);
+			(*it)->incrDuration(WB);
+			wakeup(issueList,(*it)->dest,(*it)->tag);
+		}
+
+		it++;
+	}
+	exeList->cleanup();
+
+#ifdef DEBUG
+	cout << "After executing :" << endl;
+	cout << "Dispatch list\n";
+	printList(dispatchList);
+	cout << "Issue list\n";
+	printList(issueList);
+	cout << "Exe list\n";
+	printList(exeList);
+	cout << "Reg File\n";
+	regFile.print();
+#endif
 }
 
 int Processor::issue() {
@@ -320,11 +385,11 @@ int Processor::issue() {
 	//sort(tempList.begin(),tempList.end(),myfunc);
 
 #ifdef DEBUG
-	cout << "TempList \n";
+	cout << "TempList size" << tempList.size() << endl;
 	printList(&tempList);
 #endif
 	it = tempList.begin();
-	while(i<numScalarWay && tempList.size()!= 0 && !exeList->isFull() && it!= tempList.end() ) {
+	while(i<numScalarWay && tempList.size()!=0 && !exeList->isFull() && it!= tempList.end() ) {
 		(*it)->setStage(EX);
 		(*it)->setBeginCycle(totalCycle,EX);
 		
@@ -335,6 +400,16 @@ int Processor::issue() {
 	}	
 
 	issueList->cleanup();
+
+#ifdef DEBUG
+	cout << "After issueing :" << endl;
+	cout << "Dispatch list\n";
+	printList(dispatchList);
+	cout << "Issue list\n";
+	printList(issueList);
+	cout << "Exe list\n";
+	printList(exeList);
+#endif
 }
 
 int Processor::dispatch() {
@@ -362,8 +437,11 @@ int Processor::dispatch() {
 			issueList->push_back( *it );	
 
 			if ( (*it)->dest != -1 ) {
+#ifdef DEBUG
+				cout << "Setting tag for " << (*it)->dest << " as " << (*it)->tag << endl;
+#endif
 				regFile.setTag((*it)->dest,(*it)->tag);			
-				regFile.setReady((*it)->dest,false);
+				regFile.setReady( (*it)->dest,false);
 			}
 
 			i++;
@@ -381,16 +459,23 @@ int Processor::dispatch() {
 	}
 
 	dispatchList->cleanup();
+#ifdef DEBUG
+	cout << "After dispatching :" << endl;
+	cout << "Dispatch list\n";
+	printList(dispatchList);
+	cout << "Issue list\n";
+	printList(issueList);
+#endif
 }
 
-int Processor::fetch(ifstream &myfile) {
+int Processor::fetch( ) {
 
 	string line;
 	char address[9];
 	int i=0;
 	int operType,dest,src1,src2;	
 	Instruction *instr;
-	if(myfile.is_open() ) {
+	//if(myfile.is_open() ) {
 		while( i < numScalarWay && !dispatchList->isFull() && getline(myfile,line) ) {
 			
 		//	cout << myfile.eof() << endl;
@@ -413,7 +498,7 @@ int Processor::fetch(ifstream &myfile) {
 			instr->setBeginCycle(totalCycle,IF);
 			//instr->incrDuration(IF);
 	
-			robQ->push(instr);		
+			robQ->push_back(instr);		
 			dispatchList->push_back(instr);
 				
 			i++;
@@ -421,21 +506,32 @@ int Processor::fetch(ifstream &myfile) {
 			robEntryIndex = (robEntryIndex+1)%ROB_SIZE;
 		}
 
+#ifdef DEBUG
+		cout << "Dispatch List After fetching : " << totalIns-1 << endl;
+		printList(dispatchList);
+#endif
 		return 0;
-	} else {
+/*	} else {
 #ifdef DEBUG
 		cout << "File is not open" << endl;
 #endif
 
 		return -1;
-	}
+	}*/
 }
 
-int Processor::run(char *fileName) {
+int Processor::run( ) {
 
-	ifstream myfile(fileName);
+	do {
+		fakeRetire();
+		execute();
+		issue();
+		dispatch();
+		fetch();
 
-	fetch(myfile);
+	} while ( advanceCycle());
+/*
+	fetch();
 	
 #ifdef DEBUG
 	cout << "After fetching. Dispatch list\n";
@@ -446,7 +542,7 @@ int Processor::run(char *fileName) {
 	issue();
 
 	totalCycle++;
-	fetch(myfile);
+	fetch();
 	dispatch();
 	issue();
 	totalCycle++;
@@ -459,18 +555,54 @@ int Processor::run(char *fileName) {
 	printList(exeList);
 	regFile.print();
 #endif
+*/
+}
+
+int Processor::wakeup(list<Instruction *> *li,int regNo,int tg ) {
+
+	for( list<Instruction *>::iterator it = li->begin(); it != li->end() ; it++ ) {
+		if( (*it)->readySrc1 == false && (*it)->src1 == tg )
+			 (*it)->readySrc1 = true;
+
+		if( (*it)->readySrc2 == false && (*it)->src2 == tg )
+                         (*it)->readySrc2 = true;
+	}
+
+	if ( regFile.getTag(regNo) == tg )
+		regFile.setReady(regNo,true);
 
 }
 
+int Processor::printStats() {
+	cout << "CONFIGURATION\n";
+	cout << " superscalar bandwidth (N) = " << numScalarWay << endl;
+	cout << " dispatch queue size (2*N) = " << 2* numScalarWay << endl;
+ 	cout << " schedule queue size (S)   = " << schedQueueSize << endl;
+	cout << "RESULTS\n";
+	totalCycle--;
+	cout << " number of instructions = " << totalIns << endl;
+	cout << " number of cycles       = " << totalCycle << endl;
+	cout << " IPC                    = " << (float)totalIns/totalCycle << endl;
+
+}
 int main(int argc,char *argv[]) {
+
+	if(argc!=4) {
+		cout << "USAGE : sim <S> <N> <trace_file>" << endl;
+		exit(1);
+	}
 
 #ifdef DEBUG
 	cout << "IF " << IF << " WB " << WB << endl;
 #endif
+	char *file = argv[3];
+	int S = atoi(argv[1]);
+	int N = atoi(argv[2]);
 
-	Processor proc(ROB_SIZE,8,16,4);
+	Processor proc(ROB_SIZE, 2*N ,S , N , file);
 
-	proc.run("debug_trace_gcc1");
+	proc.run();
+	proc.printStats();
 //	proc.run("tmp");
 	
 	//Instruction *ins = new Instruction[ROB_SIZE];

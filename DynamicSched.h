@@ -11,7 +11,8 @@
 #define NUM_REGS 128
 #define ROB_SIZE 1024
 
-#define DEBUG 1
+//#define DEBUG 1
+#define MAX_EXEC_CYCLE 5
 
 using namespace std;
 enum pipe_stage_t {IF,ID,IS,EX,WB,NUM_STAGES,INVALID_STAGE};
@@ -22,14 +23,6 @@ class Instruction;
 
 int printList( list<Instruction *> *li ) ;
 
-class myqueue : public queue<Instruction *> {
-        int len;
-public:
-        myqueue(int s);
-        bool isFull();
-
-};
-
 class mylist : public list<Instruction *> {
         int len;
 public:
@@ -38,6 +31,12 @@ public:
         virtual int cleanup() = 0 ;
 };
 
+class myqueue : public mylist {
+public:
+        myqueue(int s)  : mylist(s) {}
+	int cleanup();
+
+};
 class DispatchList : public mylist {
 
 public:
@@ -63,8 +62,6 @@ public:
 
 };
 
-
-
 class RegFile {
         bool ready[NUM_REGS];
         int tag[NUM_REGS];
@@ -77,14 +74,14 @@ public:
 	int print();
 };
 
-
 class Processor;
 class Instruction {
         pipe_stage_t curStage;
         int bCycle[NUM_STAGES]; // begin cycle time
         int duration[NUM_STAGES];
         friend class Processor;
-
+	int origSrc1;
+	int origSrc2;
 public:
         int tag;
         int operType;
@@ -110,21 +107,24 @@ class Processor {
 	int totalCycle;
 	int numScalarWay;
 	int robEntryIndex;
+	int schedQueueSize;
 	RegFile regFile;
 	Instruction *ins;
 	myqueue *robQ;
 	DispatchList *dispatchList;
 	IssueList *issueList;
 	ExeList *exeList;
-
+	ifstream myfile;
 public:
-	Processor(int ROB_size,int disList_size,int issueList_size,int exeList_size);
+	Processor(int ROB_size,int disList_size,int issueList_size,int nWay,char *fileName) ;
 	int renameSrcRegs(Instruction *i);
 	int fakeRetire();
 	int execute() ;
 	int issue() ;
 	int dispatch();
-	int fetch(ifstream &myfile) ;
-	int run(char *fileName);
-			
+	int fetch( ) ;
+	int run( );
+	int wakeup(list<Instruction *> *li,int regNo,int tg );		
+	int advanceCycle();	
+	int printStats();
 };
