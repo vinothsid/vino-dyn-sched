@@ -582,7 +582,7 @@ int Processor::printStats() {
 	totalCycle--;
 	cout << " number of instructions = " << totalIns << endl;
 	cout << " number of cycles       = " << totalCycle << endl;
-	cout << " IPC                    = " << (float)totalIns/totalCycle << endl;
+	cout << " IPC                    = " << fixed << setprecision(2) << (float)totalIns/totalCycle << endl;
 
 }
 int main(int argc,char *argv[]) {
